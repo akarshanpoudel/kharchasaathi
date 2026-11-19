@@ -8,7 +8,10 @@ from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
-from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+from rest_framework_simplejwt.views import (
+    TokenObtainPairView,
+    TokenRefreshView,
+)
 
 from .models import (
     Account,
@@ -40,26 +43,26 @@ from .services import FinancialService
 @permission_classes([AllowAny])
 def register_user(request):
 
-    username = request.data.get('username')
-    password = request.data.get('password')
-    email = request.data.get('email', '')
+    username = (request.data.get('username') or '').strip()
+    password = request.data.get('password') or ''
+    email = (request.data.get('email') or '').strip()
 
     if not username or not password:
         return Response(
-            {'error': 'Username and password required'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    if User.objects.filter(username=username).exists():
-        return Response(
-            {'error': 'Username already exists'},
-            status=status.HTTP_400_BAD_REQUEST
+            {'error': 'Username and password are required.'},
+            status=status.HTTP_400_BAD_REQUEST,
         )
 
     if len(password) < 8:
         return Response(
-            {'error': 'Password must be at least 8 characters'},
-            status=status.HTTP_400_BAD_REQUEST
+            {'error': 'Password must be at least 8 characters.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if User.objects.filter(username=username).exists():
+        return Response(
+            {'error': 'Username already exists.'},
+            status=status.HTTP_400_BAD_REQUEST,
         )
 
     try:
@@ -68,21 +71,21 @@ def register_user(request):
             user = User.objects.create_user(
                 username=username,
                 password=password,
-                email=email
+                email=email,
             )
 
             # Create default Personal Hisab workspace
             workspace = Workspace.objects.create(
                 name=f"{username}'s Hisab",
                 workspace_type='PERSONAL',
-                owner=user
+                owner=user,
             )
 
             # Add user as workspace owner
             WorkspaceMember.objects.create(
                 workspace=workspace,
                 user=user,
-                role='OWNER'
+                role='OWNER',
             )
 
             # Default Cash Account
@@ -90,7 +93,7 @@ def register_user(request):
                 workspace=workspace,
                 name='Cash in Hand',
                 account_type='CASH',
-                balance=0
+                balance=0,
             )
 
             # Default eSewa Wallet
@@ -98,7 +101,7 @@ def register_user(request):
                 workspace=workspace,
                 name='eSewa',
                 account_type='WALLET',
-                balance=0
+                balance=0,
             )
 
         return Response(
@@ -106,15 +109,15 @@ def register_user(request):
                 'message': 'Account created successfully',
                 'user_id': user.id,
                 'username': user.username,
-                'workspace_id': workspace.id
+                'workspace_id': workspace.id,
             },
-            status=status.HTTP_201_CREATED
+            status=status.HTTP_201_CREATED,
         )
 
     except Exception:
         return Response(
             {'error': 'Registration failed'},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
 
@@ -288,19 +291,29 @@ def bs_dashboard_summary(request):
 
     current_bs = FinancialService.get_current_bs_date()
 
-    bs_year = int(
-        request.query_params.get(
-            'bs_year',
-            current_bs['bs_year']
+    try:
+        bs_year = int(
+            request.query_params.get(
+                'bs_year',
+                current_bs['bs_year']
+            )
         )
-    )
 
-    bs_month = int(
-        request.query_params.get(
-            'bs_month',
-            current_bs['bs_month']
+        bs_month = int(
+            request.query_params.get(
+                'bs_month',
+                current_bs['bs_month']
+            )
         )
-    )
+
+        if not 1 <= bs_month <= 12:
+            raise ValueError
+
+    except (ValueError, TypeError):
+        return Response(
+            {'error': 'Invalid bs_year or bs_month'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
 
     # Total account balance
     total_balance = Account.objects.filter(
