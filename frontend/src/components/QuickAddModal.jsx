@@ -3,28 +3,45 @@ import { X, Users } from 'lucide-react';
 import { authService, financeService, sapatiService } from '../services/api';
 import { formatNPR } from '../utils/formatters';
 
+function formatApiError(err, fallback = 'Could not save transaction.') {
+  if (!err.response) {
+    return 'Network error — could not reach server.';
+  }
+  const data = err.response.data;
+  if (typeof data === 'string') return data;
+  if (data?.detail) return data.detail;
+  if (data?.error) return data.error;
+  if (data && typeof data === 'object') {
+    return Object.entries(data)
+      .map(([field, msgs]) => `${field}: ${Array.isArray(msgs) ? msgs.join(', ') : msgs}`)
+      .join(' | ');
+  }
+  return fallback;
+}
+
 export default function QuickAddModal({ isOpen, onClose, accounts, categories, onSaved }) {
   const [amount, setAmount] = useState('');
   const [accountId, setAccountId] = useState('');
   const [categoryId, setCategoryId] = useState('');
   const [note, setNote] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState('');
 
   // Sapati split states
   const [isSplitSapati, setIsSplitSapati] = useState(false);
   const [counterpartyName, setCounterpartyName] = useState('');
-  const [sapatiDirection, setSapatiDirection] = useState('TO_RECEIVE'); // 'TO_RECEIVE' | 'TO_PAY'
+  const [sapatiDirection, setSapatiDirection] = useState('TO_RECEIVE');
   const [personalShare, setPersonalShare] = useState('');
 
   useEffect(() => {
-    if (accounts.length > 0 && !accountId) {
-      setAccountId(accounts[0].id);
+    if (accounts.length > 0 && !accounts.some((a) => String(a.id) === String(accountId))) {
+      setAccountId(String(accounts[0].id));
     }
   }, [accounts, accountId]);
 
   useEffect(() => {
-    if (categories.length > 0 && !categoryId) {
-      setCategoryId(categories[0].id);
+    if (categories.length > 0 && !categories.some((c) => String(c.id) === String(categoryId))) {
+      setCategoryId(String(categories[0].id));
     }
   }, [categories, categoryId]);
 
@@ -39,6 +56,7 @@ export default function QuickAddModal({ isOpen, onClose, accounts, categories, o
   const resetForm = () => {
     setAmount('');
     setNote('');
+    setFormError('');
     setIsSplitSapati(false);
     setCounterpartyName('');
     setSapatiDirection('TO_RECEIVE');
@@ -47,10 +65,20 @@ export default function QuickAddModal({ isOpen, onClose, accounts, categories, o
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (numericTotal <= 0) return;
+    setFormError('');
+
+    if (numericTotal <= 0) {
+      setFormError('Please enter an amount greater than 0.');
+      return;
+    }
+
+    if (!accountId) {
+      setFormError('No payment account available. Please create an account first.');
+      return;
+    }
 
     if (isSplitSapati && !counterpartyName.trim()) {
-      alert('Please enter who the Sapati is with.');
+      setFormError('Please enter who the Sapati is with.');
       return;
     }
 
@@ -59,16 +87,21 @@ export default function QuickAddModal({ isOpen, onClose, accounts, categories, o
       const todayAD = new Date().toISOString().split('T')[0];
       const workspaceId = authService.getWorkspaceId();
 
-      const txResult = await financeService.createTransaction({
+      const payload = {
         workspace: workspaceId,
         transaction_type: 'EXPENSE',
         source_account: Number(accountId),
         total_amount: numericTotal,
         personal_expense_amount: numericPersonal,
-        category: categoryId ? Number(categoryId) : null,
         note: note.trim() || (isSplitSapati ? `Sapati with ${counterpartyName.trim()}` : ''),
         ad_date: todayAD,
-      });
+      };
+
+      if (categoryId) {
+        payload.category = Number(categoryId);
+      }
+
+      const txResult = await financeService.createTransaction(payload);
 
       let sapatiQueued = false;
       if (isSplitSapati && sapatiAmount > 0) {
@@ -88,7 +121,8 @@ export default function QuickAddModal({ isOpen, onClose, accounts, categories, o
       onSaved(txResult.queuedOffline || sapatiQueued);
       onClose();
     } catch (err) {
-      alert(err.response?.data?.detail || err.response?.data?.error || 'Could not save transaction.');
+      console.error('Failed to save transaction:', err.response?.data || err);
+      setFormError(formatApiError(err));
     } finally {
       setSubmitting(false);
     }
@@ -100,12 +134,19 @@ export default function QuickAddModal({ isOpen, onClose, accounts, categories, o
         <div className="flex justify-between items-center mb-5">
           <h3 className="text-lg font-bold text-white">Quick Expense (छिटो खर्च)</h3>
           <button
+            type="button"
             onClick={onClose}
             className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
           >
             <X size={18} />
           </button>
         </div>
+
+        {formError && (
+          <div className="mb-4 bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs rounded-xl px-3.5 py-2.5">
+            {formError}
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div>
@@ -130,11 +171,15 @@ export default function QuickAddModal({ isOpen, onClose, accounts, categories, o
                 onChange={(e) => setAccountId(e.target.value)}
                 className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500"
               >
-                {accounts.map((acc) => (
-                  <option key={acc.id} value={acc.id}>
-                    {acc.name}
-                  </option>
-                ))}
+                {accounts.length === 0 ? (
+                  <option value="">No accounts</option>
+                ) : (
+                  accounts.map((acc) => (
+                    <option key={acc.id} value={acc.id}>
+                      {acc.name}
+                    </option>
+                  ))
+                )}
               </select>
             </div>
 
@@ -145,11 +190,15 @@ export default function QuickAddModal({ isOpen, onClose, accounts, categories, o
                 onChange={(e) => setCategoryId(e.target.value)}
                 className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500"
               >
-                {categories.map((cat) => (
-                  <option key={cat.id} value={cat.id}>
-                    {cat.name}
-                  </option>
-                ))}
+                {categories.length === 0 ? (
+                  <option value="">Default</option>
+                ) : (
+                  categories.map((cat) => (
+                    <option key={cat.id} value={cat.id}>
+                      {cat.name}
+                    </option>
+                  ))
+                )}
               </select>
             </div>
           </div>
