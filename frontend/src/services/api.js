@@ -137,6 +137,29 @@ export const financeService = {
     return syncedCount;
   },
 };
+
+export const contactService = {
+  getAll: async (workspaceId = authService.getWorkspaceId()) => {
+    const response = await api.get(`/contacts/?workspace=${workspaceId}`);
+    return Array.isArray(response.data) ? response.data : response.data.results || [];
+  },
+
+  getOrCreate: async (name, workspaceId = authService.getWorkspaceId()) => {
+    const cleanName = name.trim();
+    const existing = await contactService.getAll(workspaceId);
+    const match = existing.find(
+      (c) => c.name.trim().toLowerCase() === cleanName.toLowerCase()
+    );
+    if (match) return match;
+
+    const response = await api.post('/contacts/', {
+      workspace: workspaceId,
+      name: cleanName,
+    });
+    return response.data;
+  },
+};
+
 export const sapatiService = {
   getAll: async (workspaceId = authService.getWorkspaceId()) => {
     const response = await api.get(`/sapati/?workspace=${workspaceId}`);
@@ -146,39 +169,11 @@ export const sapatiService = {
     return data;
   },
 
-  create: async (sapatiData) => {
-    const idempotencyKey =
-      sapatiData.idempotency_key ||
-      (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
-    const payload = { ...sapatiData, idempotency_key: idempotencyKey };
-
-    try {
-      const response = await api.post('/sapati/', payload);
-      return { data: response.data, queuedOffline: false };
-    } catch (err) {
-      if (!err.response) {
-        await db.syncQueue.add({
-          idempotency_key: idempotencyKey,
-          endpoint: '/sapati/',
-          method: 'POST',
-          payload,
-          created_at: new Date().toISOString(),
-        });
-        await db.sapati.add({
-          ...payload,
-          id: `local-${idempotencyKey}`,
-          is_settled: false,
-          synced: false,
-        });
-        return { data: payload, queuedOffline: true };
-      }
-      throw err;
-    }
-  },
-
-  settle: async (sapatiId, settlementPayload = {}) => {
-    // Adjust the URL/method if your backend uses a custom action like `/sapati/${sapatiId}/settle/`
-    const response = await api.post(`/sapati/${sapatiId}/settle/`, settlementPayload);
+  settle: async (splitId, accountId, workspaceId = authService.getWorkspaceId()) => {
+    const response = await api.post(`/sapati/${splitId}/settle/`, {
+      account_id: Number(accountId),
+      workspace_id: Number(workspaceId),
+    });
     return response.data;
   },
 };
