@@ -1,10 +1,25 @@
+
 import React, { useState, useEffect, useCallback } from 'react';
 import { formatNPR } from './utils/formatters';
 import { getBSDateParts } from './utils/bsDate';
 import { financeService, authService } from './services/api';
 import { db } from './db/offlineStore';
+
 import QuickAddModal from './components/QuickAddModal';
-import { Wallet, PlusCircle, ArrowUpRight, ArrowDownLeft, LogOut, RefreshCw, AlertCircle } from 'lucide-react';
+import SapatiTab from './components/SapatiTab';
+import AccountsTab from './components/AccountsTab';
+
+import {
+  Users,
+  Wallet,
+  PlusCircle,
+  ArrowUpRight,
+  ArrowDownLeft,
+  LogOut,
+  RefreshCw,
+  AlertCircle,
+} from 'lucide-react';
+
 
 export default function App() {
   const [isBlurred, setIsBlurred] = useState(false);
