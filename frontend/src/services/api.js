@@ -104,41 +104,22 @@ export const financeService = {
   // DASHBOARD
   // ------------------------------------------
 
-  getDashboard: async (
-    workspaceId = authService.getWorkspaceId()
-  ) => {
-    const response = await api.get(
-      `/dashboard/?workspace=${workspaceId}`
-    );
-
+  getDashboard: async (workspaceId = authService.getWorkspaceId(), bsYear = null, bsMonth = null) => {
+    const params = new URLSearchParams({ workspace: workspaceId });
+    if (bsYear) params.append('bs_year', bsYear);
+    if (bsMonth) params.append('bs_month', bsMonth);
+    const response = await api.get(`/dashboard/?${params.toString()}`);
     return response.data;
   },
 
-
-  // ------------------------------------------
-  // TRANSACTIONS
-  // ------------------------------------------
-
-  getTransactions: async (
-    workspaceId = authService.getWorkspaceId()
-  ) => {
-    const response = await api.get(
-      `/transactions/?workspace=${workspaceId}`
-    );
-
-    const data = Array.isArray(response.data)
-      ? response.data
-      : response.data.results || [];
-
+  getTransactions: async (workspaceId = authService.getWorkspaceId(), bsYear = null, bsMonth = null) => {
+    const params = new URLSearchParams({ workspace: workspaceId });
+    if (bsYear) params.append('bs_year', bsYear);
+    if (bsMonth) params.append('bs_month', bsMonth);
+    const response = await api.get(`/transactions/?${params.toString()}`);
+    const data = Array.isArray(response.data) ? response.data : response.data.results || [];
     await db.transactions.clear();
-
-    await db.transactions.bulkAdd(
-      data.map((tx) => ({
-        ...tx,
-        synced: true,
-      }))
-    );
-
+    await db.transactions.bulkAdd(data.map((tx) => ({ ...tx, synced: true })));
     return data;
   },
 
