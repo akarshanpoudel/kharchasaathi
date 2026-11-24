@@ -25,6 +25,8 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [isQuickAddOpen, setIsQuickAddOpen] = useState(false);
+  const [selectedBsYear, setSelectedBsYear] = useState(null);
+  const [selectedBsMonth, setSelectedBsMonth] = useState(null);
 
   const [activeTab, setActiveTab] = useState('dashboard');
 

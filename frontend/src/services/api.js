@@ -1,4 +1,3 @@
-
 import axios from 'axios';
 import { db } from '../db/offlineStore';
 
@@ -11,11 +10,16 @@ const api = axios.create({
   },
 });
 
+// ==========================================
+// REQUEST INTERCEPTOR
+// ==========================================
+
 api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('access_token');
 
     if (token) {
+      config.headers = config.headers || {};
       config.headers.Authorization = `Bearer ${token}`;
     }
 
@@ -23,7 +27,6 @@ api.interceptors.request.use(
   },
   (error) => Promise.reject(error)
 );
-
 
 // ==========================================
 // AUTH SERVICE
@@ -37,31 +40,15 @@ export const authService = {
     });
 
     if (response.data.access) {
-      localStorage.setItem('access_token', response.data.access);
-      localStorage.setItem('refresh_token', response.data.refresh);
-    }
+      localStorage.setItem(
+        'access_token',
+        response.data.access
+      );
 
-    // Fetch user's workspace if not already saved
-    if (!localStorage.getItem('workspace_id')) {
-      try {
-        const wsRes = await api.get('/workspaces/');
-
-        const list = Array.isArray(wsRes.data)
-          ? wsRes.data
-          : wsRes.data.results || [];
-
-        if (list.length > 0) {
-          localStorage.setItem(
-            'workspace_id',
-            String(list[0].id)
-          );
-        }
-      } catch (e) {
-        console.warn(
-          'Could not fetch workspaces immediately after login:',
-          e
-        );
-      }
+      localStorage.setItem(
+        'refresh_token',
+        response.data.refresh
+      );
     }
 
     return response.data;
@@ -73,13 +60,6 @@ export const authService = {
       password,
       email,
     });
-
-    if (response.data.workspace_id) {
-      localStorage.setItem(
-        'workspace_id',
-        String(response.data.workspace_id)
-      );
-    }
 
     return response.data;
   },
@@ -94,6 +74,228 @@ export const authService = {
     Number(localStorage.getItem('workspace_id') || 1),
 };
 
+// ==========================================
+// JWT REFRESH RESPONSE INTERCEPTOR
+// ==========================================
+
+let isRefreshing = false;
+let pendingQueue = [];
+
+const processQueue = (error, token = null) => {
+  pendingQueue.forEach((promise) => {
+    if (error) {
+      promise.reject(error);
+    } else {
+      promise.resolve(token);
+    }
+  });
+
+  pendingQueue = [];
+};
+
+api.interceptors.response.use(
+  (response) => response,
+
+  async (error) => {
+    const originalRequest = error.config;
+
+    const refreshToken =
+      localStorage.getItem('refresh_token');
+
+    // ------------------------------------------
+    // CHECK WHETHER REQUEST CAN BE RETRIED
+    // ------------------------------------------
+
+    if (
+      error.response?.status === 401 &&
+      originalRequest &&
+      !originalRequest._retry &&
+      refreshToken &&
+      !originalRequest.url?.includes('/auth/')
+    ) {
+      // ------------------------------------------
+      // WAIT IF ANOTHER REQUEST IS REFRESHING
+      // ------------------------------------------
+
+      if (isRefreshing) {
+        return new Promise((resolve, reject) => {
+          pendingQueue.push({
+            resolve,
+            reject,
+          });
+        }).then((newToken) => {
+          originalRequest.headers =
+            originalRequest.headers || {};
+
+          originalRequest.headers.Authorization =
+            `Bearer ${newToken}`;
+
+          return api(originalRequest);
+        });
+      }
+
+      // ------------------------------------------
+      // START TOKEN REFRESH
+      // ------------------------------------------
+
+      originalRequest._retry = true;
+      isRefreshing = true;
+
+      try {
+        const res = await axios.post(
+          `${API_BASE_URL}auth/token/refresh/`,
+          {
+            refresh: refreshToken,
+          },
+          {
+            headers: {
+              'Content-Type': 'application/json',
+            },
+          }
+        );
+
+        const newAccess = res.data.access;
+
+        // Save refreshed access token
+        localStorage.setItem(
+          'access_token',
+          newAccess
+        );
+
+        // Support refresh token rotation
+        if (res.data.refresh) {
+          localStorage.setItem(
+            'refresh_token',
+            res.data.refresh
+          );
+        }
+
+        // Resolve queued requests
+        processQueue(null, newAccess);
+
+        // Retry original request
+        originalRequest.headers =
+          originalRequest.headers || {};
+
+        originalRequest.headers.Authorization =
+          `Bearer ${newAccess}`;
+
+        return api(originalRequest);
+
+      } catch (refreshErr) {
+        // Reject queued requests
+        processQueue(refreshErr, null);
+
+        // Refresh failed: log out
+        authService.logout();
+
+        // Return user to login state
+        window.location.reload();
+
+        return Promise.reject(refreshErr);
+
+      } finally {
+        isRefreshing = false;
+      }
+    }
+
+    return Promise.reject(error);
+  }
+);
+
+
+// ==========================================
+// WORKSPACE SERVICE
+// ==========================================
+
+export const workspaceService = {
+  // ------------------------------------------
+  // GET ALL WORKSPACES
+  // ------------------------------------------
+
+  getAll: async () => {
+    const response = await api.get('/workspaces/');
+
+    return Array.isArray(response.data)
+      ? response.data
+      : response.data.results || [];
+  },
+
+  // ------------------------------------------
+  // CREATE WORKSPACE
+  // ------------------------------------------
+
+  create: async ({
+    name,
+    workspace_type = 'SHARED',
+  }) => {
+    const response = await api.post('/workspaces/', {
+      name,
+      workspace_type,
+    });
+
+    const workspace = response.data;
+
+    // Automatically activate newly created workspace
+    if (workspace.id) {
+      workspaceService.setActive(workspace.id);
+    }
+
+    return workspace;
+  },
+
+  // ------------------------------------------
+  // JOIN WORKSPACE USING INVITE CODE
+  // ------------------------------------------
+
+  join: async (inviteCode) => {
+    const response = await api.post(
+      '/workspaces/join/',
+      {
+        invite_code: inviteCode.trim(),
+      }
+    );
+
+    const workspace = response.data;
+
+    // Automatically activate joined workspace
+    if (workspace.id) {
+      workspaceService.setActive(workspace.id);
+    }
+
+    return workspace;
+  },
+
+  // ------------------------------------------
+  // SWITCH ACTIVE WORKSPACE
+  // ------------------------------------------
+
+  setActive: (workspaceId) => {
+    if (!workspaceId) {
+      throw new Error('Workspace ID is required');
+    }
+
+    localStorage.setItem(
+      'workspace_id',
+      String(workspaceId)
+    );
+
+    return Number(workspaceId);
+  },
+
+  // ------------------------------------------
+  // GET ACTIVE WORKSPACE
+  // ------------------------------------------
+
+  getActive: () => {
+    const workspaceId =
+      localStorage.getItem('workspace_id');
+
+    return workspaceId
+      ? Number(workspaceId)
+      : null;
+  },
+};
 
 // ==========================================
 // FINANCE SERVICE
@@ -104,25 +306,70 @@ export const financeService = {
   // DASHBOARD
   // ------------------------------------------
 
-  getDashboard: async (workspaceId = authService.getWorkspaceId(), bsYear = null, bsMonth = null) => {
-    const params = new URLSearchParams({ workspace: workspaceId });
-    if (bsYear) params.append('bs_year', bsYear);
-    if (bsMonth) params.append('bs_month', bsMonth);
-    const response = await api.get(`/dashboard/?${params.toString()}`);
+  getDashboard: async (
+    workspaceId = authService.getWorkspaceId(),
+    bsYear = null,
+    bsMonth = null
+  ) => {
+    const params = new URLSearchParams({
+      workspace: workspaceId,
+    });
+
+    if (bsYear) {
+      params.append('bs_year', bsYear);
+    }
+
+    if (bsMonth) {
+      params.append('bs_month', bsMonth);
+    }
+
+    const response = await api.get(
+      `/dashboard/?${params.toString()}`
+    );
+
     return response.data;
   },
 
-  getTransactions: async (workspaceId = authService.getWorkspaceId(), bsYear = null, bsMonth = null) => {
-    const params = new URLSearchParams({ workspace: workspaceId });
-    if (bsYear) params.append('bs_year', bsYear);
-    if (bsMonth) params.append('bs_month', bsMonth);
-    const response = await api.get(`/transactions/?${params.toString()}`);
-    const data = Array.isArray(response.data) ? response.data : response.data.results || [];
+  // ------------------------------------------
+  // TRANSACTIONS
+  // ------------------------------------------
+
+  getTransactions: async (
+    workspaceId = authService.getWorkspaceId(),
+    bsYear = null,
+    bsMonth = null
+  ) => {
+    const params = new URLSearchParams({
+      workspace: workspaceId,
+    });
+
+    if (bsYear) {
+      params.append('bs_year', bsYear);
+    }
+
+    if (bsMonth) {
+      params.append('bs_month', bsMonth);
+    }
+
+    const response = await api.get(
+      `/transactions/?${params.toString()}`
+    );
+
+    const data = Array.isArray(response.data)
+      ? response.data
+      : response.data.results || [];
+
     await db.transactions.clear();
-    await db.transactions.bulkAdd(data.map((tx) => ({ ...tx, synced: true })));
+
+    await db.transactions.bulkAdd(
+      data.map((tx) => ({
+        ...tx,
+        synced: true,
+      }))
+    );
+
     return data;
   },
-
 
   // ------------------------------------------
   // ACCOUNTS
@@ -162,12 +409,10 @@ export const financeService = {
       payload
     );
 
-    // Update local account cache
     await db.accounts.put(response.data);
 
     return response.data;
   },
-
 
   // ------------------------------------------
   // CATEGORIES
@@ -185,7 +430,6 @@ export const financeService = {
 
     return data;
   },
-
 
   // ------------------------------------------
   // CREATE TRANSACTION
@@ -215,7 +459,6 @@ export const financeService = {
         data: response.data,
         queuedOffline: false,
       };
-
     } catch (err) {
       // Queue transaction if network/server is unreachable
       if (!err.response) {
@@ -241,7 +484,6 @@ export const financeService = {
     }
   },
 
-
   // ------------------------------------------
   // TRANSFER
   // ------------------------------------------
@@ -252,7 +494,6 @@ export const financeService = {
       transaction_type: 'TRANSFER',
     });
   },
-
 
   // ------------------------------------------
   // OFFLINE SYNC
@@ -273,10 +514,9 @@ export const financeService = {
         await db.syncQueue.delete(item.id);
 
         syncedCount += 1;
-
       } catch (err) {
         if (!err.response) {
-          break; // Still offline
+          break;
         }
       }
     }
@@ -284,7 +524,6 @@ export const financeService = {
     return syncedCount;
   },
 };
-
 
 // ==========================================
 // CONTACT SERVICE
@@ -332,7 +571,6 @@ export const contactService = {
   },
 };
 
-
 // ==========================================
 // SAPATI SERVICE
 // ==========================================
@@ -371,6 +609,5 @@ export const sapatiService = {
     return response.data;
   },
 };
-
 
 export default api;
