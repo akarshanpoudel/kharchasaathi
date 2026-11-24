@@ -4,6 +4,7 @@ import { formatNPR } from './utils/formatters';
 import { getBSDateParts } from './utils/bsDate';
 import { financeService, authService, sapatiService } from './services/api';
 import { db } from './db/offlineStore';
+import { Eye, EyeOff } from "lucide-react";
 
 import QuickAddModal from './components/QuickAddModal';
 import SapatiTab from './components/SapatiTab';
@@ -272,11 +273,13 @@ export default function App() {
 
             <button
               onClick={() => setIsBlurred(!isBlurred)}
-              className="text-xs bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-lg border border-slate-700 transition"
-              title="Toggle balance visibility"
+              className="flex items-center justify-center text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 p-2 rounded-lg border border-slate-700 transition"
+              title={isBlurred ? 'Show balance' : 'Hide balance'}
+              aria-label={isBlurred ? 'Show balance' : 'Hide balance'}
             >
-              {isBlurred ? '🙈' : '👁️'}
+              {isBlurred ? <EyeOff size={16} /> : <Eye size={16} />}
             </button>
+
           </div>
         </header>
 
@@ -294,7 +297,7 @@ export default function App() {
           {activeTab === 'dashboard' && (
             <>
               {/* Total balance */}
-              <div className="bg-gradient-to-br from-emerald-950/60 to-slate-900 p-5 rounded-2xl border border-emerald-500/30 shadow-lg relative overflow-hidden">
+              <div className="bg-linear-to-br from-emerald-950/60 to-slate-900 p-5 rounded-2xl border border-emerald-500/30 shadow-lg relative overflow-hidden">
                 <div className="absolute -right-4 -bottom-4 opacity-10">
                   <Wallet size={120} className="text-emerald-400" />
                 </div>
