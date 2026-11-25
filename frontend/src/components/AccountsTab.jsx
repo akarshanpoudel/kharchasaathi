@@ -45,13 +45,11 @@ export default function AccountsTab({ accounts, isBlurred, onRefresh }) {
   const [statusMsg, setStatusMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
-  // New Account state
   const [name, setName] = useState('');
   const [accountType, setAccountType] = useState('WALLET');
   const [openingBalance, setOpeningBalance] = useState('');
   const [creatingAccount, setCreatingAccount] = useState(false);
 
-  // Self-Transfer state
   const [fromAccountId, setFromAccountId] = useState('');
   const [toAccountId, setToAccountId] = useState('');
   const [transferAmount, setTransferAmount] = useState('');
@@ -90,7 +88,7 @@ export default function AccountsTab({ accounts, isBlurred, onRefresh }) {
       setOpeningBalance('');
       setShowAddForm(false);
       setStatusMsg('Account added successfully.');
-      await onRefresh();
+      if (onRefresh) await onRefresh();
     } catch (err) {
       setErrorMsg(formatApiError(err, 'Could not create account.'));
     } finally {
@@ -138,7 +136,7 @@ export default function AccountsTab({ accounts, isBlurred, onRefresh }) {
           ? 'Transfer queued offline — will sync once online.'
           : 'Transfer completed without affecting monthly expenses.'
       );
-      await onRefresh();
+      if (onRefresh) await onRefresh();
     } catch (err) {
       setErrorMsg(formatApiError(err, 'Could not complete transfer.'));
     } finally {
@@ -185,7 +183,6 @@ export default function AccountsTab({ accounts, isBlurred, onRefresh }) {
         </div>
       )}
 
-      {/* Account Cards Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {accounts.map((acc) => (
           <div
@@ -210,7 +207,6 @@ export default function AccountsTab({ accounts, isBlurred, onRefresh }) {
         ))}
       </div>
 
-      {/* Add Account Form */}
       {showAddForm && (
         <form
           onSubmit={handleCreateAccount}
@@ -262,7 +258,6 @@ export default function AccountsTab({ accounts, isBlurred, onRefresh }) {
         </form>
       )}
 
-      {/* Self-Transfer Form */}
       {showTransferForm && accounts.length >= 2 && (
         <form
           onSubmit={handleTransfer}

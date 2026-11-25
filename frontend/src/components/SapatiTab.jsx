@@ -90,7 +90,6 @@ export default function SapatiTab({ sapatiList = [], accounts = [], isBlurred = 
         </div>
       )}
 
-      {/* Pending Sapati Splits */}
       <div className="flex flex-col gap-2.5">
         <h3 className="text-xs uppercase tracking-wider text-slate-400 font-semibold">
           Pending ({activeItems.length})
@@ -152,7 +151,6 @@ export default function SapatiTab({ sapatiList = [], accounts = [], isBlurred = 
         )}
       </div>
 
-      {/* Settled Sapati Splits */}
       {settledItems.length > 0 && (
         <div className="flex flex-col gap-2">
           <h3 className="text-xs uppercase tracking-wider text-slate-500 font-semibold">
