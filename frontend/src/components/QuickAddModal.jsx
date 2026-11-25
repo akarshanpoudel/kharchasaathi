@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { X, Users } from 'lucide-react';
-import { authService, financeService, sapatiService } from '../services/api';
+import { authService, contactService, financeService } from '../services/api';
 import { formatNPR } from '../utils/formatters';
 
 function formatApiError(err, fallback = 'Could not save transaction.') {
   if (!err.response) {
-    return 'Network error — could not reach server.';
+    return err.message ? `${fallback} (${err.message})` : 'Network error — could not reach server.';
   }
   const data = err.response.data;
   if (typeof data === 'string') return data;
@@ -27,10 +27,10 @@ export default function QuickAddModal({ isOpen, onClose, accounts, categories, o
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
 
-  // Sapati split states
+  // Sapati split states ('RECEIVABLE' | 'PAYABLE')
   const [isSplitSapati, setIsSplitSapati] = useState(false);
   const [counterpartyName, setCounterpartyName] = useState('');
-  const [sapatiDirection, setSapatiDirection] = useState('TO_RECEIVE');
+  const [sapatiDirection, setSapatiDirection] = useState('RECEIVABLE');
   const [personalShare, setPersonalShare] = useState('');
 
   useEffect(() => {
@@ -59,7 +59,7 @@ export default function QuickAddModal({ isOpen, onClose, accounts, categories, o
     setFormError('');
     setIsSplitSapati(false);
     setCounterpartyName('');
-    setSapatiDirection('TO_RECEIVE');
+    setSapatiDirection('RECEIVABLE');
     setPersonalShare('');
   };
 
@@ -87,6 +87,18 @@ export default function QuickAddModal({ isOpen, onClose, accounts, categories, o
       const todayAD = new Date().toISOString().split('T')[0];
       const workspaceId = authService.getWorkspaceId();
 
+      let splits = [];
+      if (isSplitSapati && sapatiAmount > 0) {
+        const contact = await contactService.getOrCreate(counterpartyName, workspaceId);
+        splits = [
+          {
+            contact: contact.id,
+            direction: sapatiDirection,
+            amount: sapatiAmount,
+          },
+        ];
+      }
+
       const payload = {
         workspace: workspaceId,
         transaction_type: 'EXPENSE',
@@ -95,33 +107,24 @@ export default function QuickAddModal({ isOpen, onClose, accounts, categories, o
         personal_expense_amount: numericPersonal,
         note: note.trim() || (isSplitSapati ? `Sapati with ${counterpartyName.trim()}` : ''),
         ad_date: todayAD,
+        ...(categoryId ? { category: Number(categoryId) } : {}),
+        ...(splits.length > 0 ? { splits } : {}),
       };
-
-      if (categoryId) {
-        payload.category = Number(categoryId);
-      }
 
       const txResult = await financeService.createTransaction(payload);
 
-      let sapatiQueued = false;
-      if (isSplitSapati && sapatiAmount > 0) {
-        const sapatiResult = await sapatiService.create({
-          workspace: workspaceId,
-          person_name: counterpartyName.trim(),
-          direction: sapatiDirection,
-          amount: sapatiAmount,
-          account: Number(accountId),
-          note: note.trim(),
-          ad_date: todayAD,
-        });
-        sapatiQueued = sapatiResult.queuedOffline;
-      }
-
       resetForm();
-      onSaved(txResult.queuedOffline || sapatiQueued);
+      if (onSaved) {
+        await onSaved(txResult.queuedOffline);
+      }
       onClose();
     } catch (err) {
-      console.error('Failed to save transaction:', err.response?.data || err);
+      console.error('Failed to save transaction:', {
+        message: err.message,
+        code: err.code,
+        status: err.response?.status,
+        data: err.response?.data,
+      });
       setFormError(formatApiError(err));
     } finally {
       setSubmitting(false);
@@ -203,7 +206,6 @@ export default function QuickAddModal({ isOpen, onClose, accounts, categories, o
             </div>
           </div>
 
-          {/* Sapati Toggle */}
           <button
             type="button"
             onClick={() => setIsSplitSapati(!isSplitSapati)}
@@ -225,9 +227,9 @@ export default function QuickAddModal({ isOpen, onClose, accounts, categories, o
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
-                  onClick={() => setSapatiDirection('TO_RECEIVE')}
+                  onClick={() => setSapatiDirection('RECEIVABLE')}
                   className={`py-2 px-3 rounded-lg text-xs font-semibold border ${
-                    sapatiDirection === 'TO_RECEIVE'
+                    sapatiDirection === 'RECEIVABLE'
                       ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300'
                       : 'bg-slate-900 border-slate-800 text-slate-400'
                   }`}
@@ -236,9 +238,9 @@ export default function QuickAddModal({ isOpen, onClose, accounts, categories, o
                 </button>
                 <button
                   type="button"
-                  onClick={() => setSapatiDirection('TO_PAY')}
+                  onClick={() => setSapatiDirection('PAYABLE')}
                   className={`py-2 px-3 rounded-lg text-xs font-semibold border ${
-                    sapatiDirection === 'TO_PAY'
+                    sapatiDirection === 'PAYABLE'
                       ? 'bg-amber-500/20 border-amber-500 text-amber-300'
                       : 'bg-slate-900 border-slate-800 text-slate-400'
                   }`}
