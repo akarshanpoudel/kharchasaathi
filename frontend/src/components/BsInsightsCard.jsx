@@ -90,7 +90,6 @@ export default function BsInsightsCard({
 
   return (
     <div className="bg-slate-950/75 border border-slate-800 rounded-2xl p-4 flex flex-col gap-4">
-      {/* BS Month Switcher */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <PieChart size={16} className="text-emerald-400" />
@@ -122,7 +121,6 @@ export default function BsInsightsCard({
         </div>
       </div>
 
-      {/* Category Breakdown & Optional Monthly Caps */}
       {categoryBreakdown.length === 0 ? (
         <p className="text-xs text-slate-500 text-center py-4">
           No personal expenses recorded in this BS month yet.

@@ -1,517 +1,570 @@
-
 import React, { useState, useEffect, useCallback } from 'react';
-import { formatNPR } from './utils/formatters';
-import { getBSDateParts } from './utils/bsDate';
-import { financeService, authService, sapatiService } from './services/api';
-import { db } from './db/offlineStore';
-import { Eye, EyeOff } from "lucide-react";
-
-import QuickAddModal from './components/QuickAddModal';
-import SapatiTab from './components/SapatiTab';
-import AccountsTab from './components/AccountsTab';
-
 import {
   Users,
   Wallet,
-  PlusCircle,
+  Home,
+  Plus,
+  Eye,
+  EyeOff,
+  LogOut,
   ArrowUpRight,
   ArrowDownLeft,
-  LogOut,
-  RefreshCw,
-  AlertCircle,
+  ArrowLeftRight,
 } from 'lucide-react';
+import { db } from './db/offlineStore';
+import {
+  authService,
+  workspaceService,
+  financeService,
+  sapatiService,
+} from './services/api';
+import { formatNPR } from './utils/formatters';
+import QuickAddModal from './components/QuickAddModal';
+import SapatiTab from './components/SapatiTab';
+import AccountsTab from './components/AccountsTab';
+import BsInsightsCard from './components/BsInsightsCard';
 
 export default function App() {
-  const [isBlurred, setIsBlurred] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [isAuthenticated, setIsAuthenticated] = useState(() => Boolean(localStorage.getItem('access_token')));
+  const [authMode, setAuthMode] = useState('login'); // 'login' | 'register'
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [email, setEmail] = useState('');
+  const [authError, setAuthError] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+
+  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard' | 'sapati' | 'accounts'
   const [isQuickAddOpen, setIsQuickAddOpen] = useState(false);
+  const [isBlurred, setIsBlurred] = useState(false);
+
+  const [workspaceId, setWorkspaceId] = useState(() => authService.getWorkspaceId());
+  const [workspaces, setWorkspaces] = useState([]);
+  const [copiedInvite, setCopiedInvite] = useState(false);
+
   const [selectedBsYear, setSelectedBsYear] = useState(null);
   const [selectedBsMonth, setSelectedBsMonth] = useState(null);
 
-  const [activeTab, setActiveTab] = useState('dashboard');
-
-  const [dashboardData, setDashboardData] = useState({
+  const [dashboard, setDashboard] = useState({
     total_balance: 0,
     monthly_personal_spend: 0,
     sapati_to_receive: 0,
     sapati_to_pay: 0,
   });
-
-  const [transactions, setTransactions] = useState([]);
   const [accounts, setAccounts] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [transactions, setTransactions] = useState([]);
   const [sapatiList, setSapatiList] = useState([]);
 
-  const [isLoggedIn, setIsLoggedIn] = useState(
-    !!localStorage.getItem('access_token')
+  const [isOnline, setIsOnline] = useState(() =>
+    typeof navigator !== 'undefined' ? navigator.onLine : true
   );
+  const [pendingSyncCount, setPendingSyncCount] = useState(0);
+  const [isFlushing, setIsFlushing] = useState(false);
 
-  const [isRegistering, setIsRegistering] = useState(false);
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-
-  const todayBS = getBSDateParts();
-
-  const loadCachedFallback = async () => {
+  const refreshPendingCount = useCallback(async () => {
     try {
-      const [cachedTxs, cachedAccounts, cachedCategories] =
-        await Promise.all([
-          db.transactions.toArray(),
-          db.accounts.toArray(),
-          db.categories.toArray(),
-        ]);
-
-      if (cachedTxs.length) {
-        setTransactions(cachedTxs);
-      }
-
-      if (cachedAccounts.length) {
-        setAccounts(cachedAccounts);
-      }
-
-      if (cachedCategories.length) {
-        setCategories(cachedCategories);
-      }
-    } catch (cacheError) {
-      console.error('Failed to load cached data:', cacheError);
-    }
-  };
-
-  const fetchData = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-
-      await financeService.flushOfflineQueue();
-
-      const wsId = authService.getWorkspaceId();
-
-      const [dash, txs, accs, cats, sapatiData] = await Promise.all([
-        financeService.getDashboard(wsId),
-        financeService.getTransactions(wsId),
-        financeService.getAccounts(wsId),
-        financeService.getCategories(),
-        sapatiService.getAll(wsId),
-      ]);
-
-      setDashboardData(dash || {});
-      setTransactions(Array.isArray(txs) ? txs : []);
-      setAccounts(Array.isArray(accs) ? accs : []);
-      setCategories(Array.isArray(cats) ? cats : []);
-      setSapatiList(Array.isArray(sapatiData) ? sapatiData : []);
+      const count = await db.syncQueue.count();
+      setPendingSyncCount(count);
     } catch (err) {
-      console.error('Failed to sync with backend:', err);
-
-      await loadCachedFallback();
-
-      setError(
-        'Showing offline/cached data. Check backend connection or login.'
-      );
-    } finally {
-      setLoading(false);
+      console.error('Failed to read syncQueue count:', err);
     }
   }, []);
 
-  useEffect(() => {
-    if (isLoggedIn) {
-      fetchData();
-    } else {
-      setLoading(false);
-    }
-  }, [isLoggedIn, fetchData]);
-
-  const handleAuth = async (e) => {
-    e.preventDefault();
-
+  const loadWorkspaces = useCallback(async () => {
     try {
-      if (isRegistering) {
-        await authService.register(
-          username,
-          password,
-          `${username}@kharchasaathi.local`
-        );
+      const list = await workspaceService.getAll();
+      setWorkspaces(list);
+      if (list.length > 0) {
+        const currentId = authService.getWorkspaceId();
+        const exists = list.some((ws) => Number(ws.id) === Number(currentId));
+        if (!exists) {
+          const fallbackId = list[0].id;
+          workspaceService.setActive(fallbackId);
+          setWorkspaceId(fallbackId);
+        }
       }
-
-      await authService.login(username, password);
-      setIsLoggedIn(true);
     } catch (err) {
-      const msg =
-        err.response?.data?.error ||
-        err.response?.data?.detail ||
-        'Authentication failed. Check credentials or backend server.';
+      console.error('Could not load workspaces:', err);
+    }
+  }, []);
 
-      alert(msg);
+  const fetchData = useCallback(
+    async (targetWsId = workspaceId, bsYear = selectedBsYear, bsMonth = selectedBsMonth) => {
+      if (!isAuthenticated) return;
+      try {
+        const [dashData, accData, catData, txData, sapatiData] = await Promise.all([
+          financeService.getDashboard(targetWsId, bsYear, bsMonth),
+          financeService.getAccounts(targetWsId),
+          financeService.getCategories(),
+          financeService.getTransactions(targetWsId, bsYear, bsMonth),
+          sapatiService.getAll(targetWsId),
+        ]);
+
+        setDashboard(dashData);
+        setAccounts(accData);
+        setCategories(catData);
+        setTransactions(txData);
+        setSapatiList(sapatiData);
+
+        if (bsYear === null && dashData?.bs_year) {
+          setSelectedBsYear(dashData.bs_year);
+        }
+        if (bsMonth === null && dashData?.bs_month) {
+          setSelectedBsMonth(dashData.bs_month);
+        }
+      } catch (err) {
+        console.error('Error loading workspace data:', err);
+      }
+    },
+    [isAuthenticated, workspaceId, selectedBsYear, selectedBsMonth]
+  );
+
+  const handleFlushQueue = useCallback(async () => {
+    if (!navigator.onLine) return;
+    setIsFlushing(true);
+    try {
+      const synced = await financeService.flushOfflineQueue();
+      await refreshPendingCount();
+      if (synced > 0) {
+        await fetchData(authService.getWorkspaceId(), selectedBsYear, selectedBsMonth);
+      }
+    } catch (err) {
+      console.error('Failed to flush offline queue:', err);
+    } finally {
+      setIsFlushing(false);
+    }
+  }, [fetchData, refreshPendingCount, selectedBsYear, selectedBsMonth]);
+
+  useEffect(() => {
+    refreshPendingCount();
+
+    const onOnline = () => {
+      setIsOnline(true);
+      handleFlushQueue();
+    };
+    const onOffline = () => {
+      setIsOnline(false);
+      refreshPendingCount();
+    };
+
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    return () => {
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('offline', onOffline);
+    };
+  }, [handleFlushQueue, refreshPendingCount]);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      loadWorkspaces();
+      fetchData(workspaceId, selectedBsYear, selectedBsMonth);
+    }
+  }, [isAuthenticated, workspaceId, selectedBsYear, selectedBsMonth, loadWorkspaces, fetchData]);
+
+  const handleAuthSubmit = async (e) => {
+    e.preventDefault();
+    setAuthError('');
+    setAuthLoading(true);
+    try {
+      if (authMode === 'login') {
+        await authService.login(username.trim(), password);
+      } else {
+        await authService.register(username.trim(), password, email.trim());
+        await authService.login(username.trim(), password);
+      }
+      const wsId = authService.getWorkspaceId();
+      setWorkspaceId(wsId);
+      setIsAuthenticated(true);
+    } catch (err) {
+      const data = err.response?.data;
+      setAuthError(data?.error || data?.detail || 'Authentication failed.');
+    } finally {
+      setAuthLoading(false);
     }
   };
 
   const handleLogout = () => {
     authService.logout();
-    setIsLoggedIn(false);
-    setActiveTab('dashboard');
+    setIsAuthenticated(false);
+    setWorkspaces([]);
+    setAccounts([]);
+    setTransactions([]);
+    setSapatiList([]);
   };
 
-  const handleTransactionSaved = async (queuedOffline) => {
-    setIsQuickAddOpen(false);
+  const handleWorkspaceChange = async (nextId) => {
+    const numericId = Number(nextId);
+    workspaceService.setActive(numericId);
+    setWorkspaceId(numericId);
+    setSelectedBsYear(null);
+    setSelectedBsMonth(null);
+    await fetchData(numericId, null, null);
+  };
 
-    if (queuedOffline) {
-      alert('Saved offline! Will sync automatically when back online.');
-      await loadCachedFallback();
-    } else {
-      await fetchData();
+  const handleMonthChange = (nextYear, nextMonth) => {
+    setSelectedBsYear(nextYear);
+    setSelectedBsMonth(nextMonth);
+  };
+
+  const handleAfterSave = async () => {
+    await refreshPendingCount();
+    await fetchData(workspaceId, selectedBsYear, selectedBsMonth);
+  };
+
+  const activeWorkspace = workspaces.find((ws) => Number(ws.id) === Number(workspaceId));
+
+  const handleCopyInvite = async () => {
+    if (!activeWorkspace?.invite_code) return;
+    try {
+      await navigator.clipboard.writeText(activeWorkspace.invite_code);
+      setCopiedInvite(true);
+      setTimeout(() => setCopiedInvite(false), 2000);
+    } catch (err) {
+      console.error('Clipboard copy failed:', err);
     }
   };
 
-  if (!isLoggedIn) {
+  if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4">
-        <div className="w-full max-w-md bg-slate-900 p-8 rounded-2xl border border-slate-800 shadow-2xl">
-          <h2 className="text-2xl font-bold text-emerald-400 mb-1">
-            खर्चसाथी (KharchaSaathi)
-          </h2>
-
-          <p className="text-xs text-slate-400 mb-6">
-            Log in to your household ledger • {todayBS.formatted} BS
+      <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-4">
+        <div className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl">
+          <h1 className="text-xl font-bold text-emerald-400 mb-1">KharchaSaathi</h1>
+          <p className="text-xs text-slate-400 mb-5">
+            {authMode === 'login' ? 'Sign in to your Hisab' : 'Create your KharchaSaathi account'}
           </p>
 
-          <form onSubmit={handleAuth} className="flex flex-col gap-4">
-            <div>
-              <label className="text-xs text-slate-400 block mb-1">
-                Username
-              </label>
-
-              <input
-                type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500"
-                placeholder="Enter username"
-                required
-              />
+          {authError && (
+            <div className="mb-4 bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs rounded-xl px-3 py-2">
+              {authError}
             </div>
+          )}
 
-            <div>
-              <label className="text-xs text-slate-400 block mb-1">
-                Password
-              </label>
-
+          <form onSubmit={handleAuthSubmit} className="flex flex-col gap-3">
+            <input
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="Username"
+              required
+              className="bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white"
+            />
+            {authMode === 'register' && (
               <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500"
-                placeholder="••••••••"
-                required
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="Email (optional)"
+                className="bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white"
               />
-            </div>
-
+            )}
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Password (min 8 chars)"
+              required
+              className="bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white"
+            />
             <button
               type="submit"
-              className="mt-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold py-3 rounded-xl transition shadow-lg shadow-emerald-500/20"
+              disabled={authLoading}
+              className="mt-1 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold py-2.5 rounded-xl text-sm transition"
             >
-              {isRegistering
-                ? 'Create Account & Workspace'
-                : 'Sign In'}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setIsRegistering(!isRegistering)}
-              className="text-xs text-slate-400 hover:text-emerald-400 text-center mt-1"
-            >
-              {isRegistering
-                ? 'Already have an account? Sign In'
-                : "Don't have an account? Create one"}
+              {authLoading ? 'Please wait...' : authMode === 'login' ? 'Login' : 'Register'}
             </button>
           </form>
+
+          <button
+            type="button"
+            onClick={() => {
+              setAuthMode(authMode === 'login' ? 'register' : 'login');
+              setAuthError('');
+            }}
+            className="mt-4 w-full text-center text-xs text-slate-400 hover:text-emerald-400"
+          >
+            {authMode === 'login'
+              ? 'Need an account? Register here'
+              : 'Already have an account? Login'}
+          </button>
         </div>
       </div>
     );
   }
 
-  const navButtonClass = (tab) =>
-    `flex flex-col items-center gap-1 text-xs transition ${
-      activeTab === tab
-        ? 'text-emerald-400'
-        : 'text-slate-400 hover:text-emerald-400'
-    }`;
-
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center pb-24">
-      <div className="w-full max-w-md bg-slate-900 min-h-screen shadow-2xl flex flex-col border-x border-slate-800">
-        {/* Header */}
-        <header className="px-6 py-4 flex justify-between items-center border-b border-slate-800 bg-slate-900/80 sticky top-0 z-10 backdrop-blur">
+    <div className="min-h-screen bg-slate-950 text-white pb-24">
+      <div className="max-w-2xl mx-auto px-4 pt-5">
+        {/* Top Header + Workspace Switcher */}
+        <header className="flex flex-wrap items-center justify-between gap-3 mb-4">
           <div>
-            <h1 className="text-xl font-bold tracking-tight text-emerald-400 flex items-center gap-2">
-              <span>खर्चसाथी</span>
-
-              <span className="text-xs bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full font-normal">
-                {todayBS.formatted}
-              </span>
-            </h1>
-
-            <p className="text-xs text-slate-400">
-              Ghar ko hisab, sajilai
-            </p>
+            <h1 className="text-lg font-bold text-white">KharchaSaathi</h1>
+            <p className="text-xs text-slate-400">नेपाली खर्च र सापटी साथी</p>
           </div>
 
-          <div className="flex items-center gap-2">
-            <button
-              onClick={fetchData}
-              className="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-300 transition"
-              title="Sync Data"
+          <div className="flex items-center gap-2 flex-wrap">
+            <select
+              aria-label="Active Workspace"
+              value={workspaceId}
+              onChange={(e) => handleWorkspaceChange(e.target.value)}
+              className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs font-semibold text-white focus:outline-none focus:border-emerald-500"
             >
-              <RefreshCw
-                size={16}
-                className={
-                  loading
-                    ? 'animate-spin text-emerald-400'
-                    : ''
-                }
-              />
-            </button>
+              {workspaces.length === 0 ? (
+                <option value={workspaceId}>Workspace #{workspaceId}</option>
+              ) : (
+                workspaces.map((ws) => (
+                  <option key={ws.id} value={ws.id}>
+                    {ws.name} {ws.workspace_type === 'SHARED' ? '(Shared)' : ''}
+                  </option>
+                ))
+              )}
+            </select>
+
+            {activeWorkspace?.invite_code && (
+              <button
+                type="button"
+                onClick={handleCopyInvite}
+                className="bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-1.5 text-[11px] font-medium text-emerald-400 transition"
+                title="Copy workspace invite code"
+              >
+                {copiedInvite ? 'Copied!' : `Code: ${activeWorkspace.invite_code}`}
+              </button>
+            )}
 
             <button
+              type="button"
               onClick={() => setIsBlurred(!isBlurred)}
-              className="flex items-center justify-center text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 p-2 rounded-lg border border-slate-700 transition"
-              title={isBlurred ? 'Show balance' : 'Hide balance'}
-              aria-label={isBlurred ? 'Show balance' : 'Hide balance'}
+              className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-white"
+              title={isBlurred ? 'Show amounts' : 'Hide amounts'}
             >
-              {isBlurred ? <EyeOff size={16} /> : <Eye size={16} />}
+              {isBlurred ? <Eye size={16} /> : <EyeOff size={16} />}
             </button>
 
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-rose-400"
+              title="Logout"
+            >
+              <LogOut size={16} />
+            </button>
           </div>
         </header>
 
-        {/* Error message */}
-        {error && (
-          <div className="mx-5 mt-4 bg-amber-500/10 border border-amber-500/30 p-3 rounded-xl flex items-center gap-3 text-amber-300 text-xs">
-            <AlertCircle size={18} className="shrink-0" />
-            <span>{error}</span>
+        {/* Offline / Pending Sync Banner */}
+        {(!isOnline || pendingSyncCount > 0) && (
+          <div
+            className={`mb-4 px-3.5 py-2 rounded-xl border text-xs flex items-center justify-between gap-2 ${
+              !isOnline
+                ? 'bg-amber-500/15 border-amber-500/40 text-amber-300'
+                : 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  !isOnline ? 'bg-amber-400' : 'bg-emerald-400 animate-pulse'
+                }`}
+              />
+              <span>
+                {!isOnline
+                  ? 'Offline mode — changes save locally'
+                  : isFlushing
+                    ? 'Syncing queued items...'
+                    : 'Back online'}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              {pendingSyncCount > 0 && (
+                <span className="bg-slate-950/80 border border-slate-700 px-2 py-0.5 rounded-full font-semibold">
+                  Pending sync: {pendingSyncCount}
+                </span>
+              )}
+              {isOnline && pendingSyncCount > 0 && !isFlushing && (
+                <button
+                  type="button"
+                  onClick={handleFlushQueue}
+                  className="underline font-semibold hover:text-white"
+                >
+                  Sync now
+                </button>
+              )}
+            </div>
           </div>
         )}
 
-        {/* Main content */}
-        <main className="p-5 flex-1 flex flex-col gap-5">
-          {/* Dashboard tab */}
+        {/* Active Tab Content */}
+        <main className="bg-slate-900/70 border border-slate-800 rounded-3xl p-4 sm:p-5 flex flex-col gap-5">
           {activeTab === 'dashboard' && (
             <>
-              {/* Total balance */}
-              <div className="bg-linear-to-br from-emerald-950/60 to-slate-900 p-5 rounded-2xl border border-emerald-500/30 shadow-lg relative overflow-hidden">
-                <div className="absolute -right-4 -bottom-4 opacity-10">
-                  <Wallet size={120} className="text-emerald-400" />
-                </div>
-
-                <p className="text-xs uppercase tracking-wider text-emerald-400 font-semibold">
-                  Total Net Balance (सकल मौज्दात)
-                </p>
-
-                <h2 className="text-3xl font-extrabold mt-1 text-white tracking-tight">
-                  {formatNPR(dashboardData.total_balance, isBlurred)}
-                </h2>
-
-                <div className="mt-4 pt-4 border-t border-slate-800 grid grid-cols-2 gap-4">
-                  <div>
-                    <span className="text-xs text-slate-400 block">
-                      Monthly Spend (यस महिना)
-                    </span>
-
-                    <span className="text-sm font-bold text-rose-400">
-                      {formatNPR(
-                        dashboardData.monthly_personal_spend,
-                        isBlurred
-                      )}
-                    </span>
-                  </div>
-
-                  <div>
-                    <span className="text-xs text-slate-400 block">
-                      BS Period
-                    </span>
-
-                    <span className="text-sm font-bold text-sky-400">
-                      {dashboardData.bs_year || todayBS.bs_year} /{' '}
-                      {dashboardData.bs_month || todayBS.bs_month}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Sapati summary */}
               <div className="grid grid-cols-2 gap-3">
-                <div className="bg-slate-800/60 p-3.5 rounded-xl border border-slate-700/60 flex flex-col justify-between">
-                  <div className="flex justify-between items-start">
-                    <span className="text-xs text-slate-400">
-                      To Receive (पाउनुपर्ने)
-                    </span>
-
-                    <ArrowDownLeft
-                      size={16}
-                      className="text-emerald-400"
-                    />
-                  </div>
-
-                  <span className="text-lg font-bold text-emerald-400 mt-2">
-                    {formatNPR(
-                      dashboardData.sapati_to_receive,
-                      isBlurred
-                    )}
-                  </span>
+                <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-4">
+                  <p className="text-xs text-slate-400">Total Balance</p>
+                  <p className="text-lg font-bold text-emerald-400 mt-1">
+                    {formatNPR(dashboard.total_balance, isBlurred)}
+                  </p>
                 </div>
-
-                <div className="bg-slate-800/60 p-3.5 rounded-xl border border-slate-700/60 flex flex-col justify-between">
-                  <div className="flex justify-between items-start">
-                    <span className="text-xs text-slate-400">
-                      To Pay (तिर्नुपर्ने)
-                    </span>
-
-                    <ArrowUpRight
-                      size={16}
-                      className="text-amber-400"
-                    />
-                  </div>
-
-                  <span className="text-lg font-bold text-amber-400 mt-2">
-                    {formatNPR(
-                      dashboardData.sapati_to_pay,
-                      isBlurred
-                    )}
-                  </span>
+                <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-4">
+                  <p className="text-xs text-slate-400">Monthly Spend</p>
+                  <p className="text-lg font-bold text-white mt-1">
+                    {formatNPR(dashboard.monthly_personal_spend, isBlurred)}
+                  </p>
+                </div>
+                <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-4">
+                  <p className="text-xs text-slate-400">Sapati to Receive</p>
+                  <p className="text-sm font-bold text-emerald-400 mt-1">
+                    {formatNPR(dashboard.sapati_to_receive, isBlurred)}
+                  </p>
+                </div>
+                <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-4">
+                  <p className="text-xs text-slate-400">Sapati to Pay</p>
+                  <p className="text-sm font-bold text-amber-400 mt-1">
+                    {formatNPR(dashboard.sapati_to_pay, isBlurred)}
+                  </p>
                 </div>
               </div>
 
-              {/* Recent transactions */}
-              <div className="flex justify-between items-center mt-2">
-                <h3 className="text-sm font-semibold text-slate-300">
-                  Recent Transactions (हालैका कारोबार)
-                </h3>
-              </div>
+              <BsInsightsCard
+                transactions={transactions}
+                categories={categories}
+                bsYear={selectedBsYear}
+                bsMonth={selectedBsMonth}
+                onChangeMonth={handleMonthChange}
+                isBlurred={isBlurred}
+              />
 
               <div className="flex flex-col gap-2.5">
+                <h2 className="text-xs uppercase tracking-wider text-slate-400 font-semibold">
+                  Recent Transactions
+                </h2>
                 {transactions.length === 0 ? (
                   <p className="text-xs text-slate-500 text-center py-6">
-                    No transactions recorded yet. Tap '+' to add one!
+                    No transactions recorded yet. Tap + to add one.
                   </p>
                 ) : (
-                  transactions.map((tx, idx) => (
-                    <div
-                      key={tx.id || idx}
-                      className="bg-slate-900/60 p-3.5 rounded-xl border border-slate-800 flex justify-between items-center"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full bg-emerald-500/10 flex items-center justify-center text-emerald-400 font-bold">
-                          {tx.transaction_type === 'EXPENSE'
-                            ? '💸'
-                            : '💰'}
-                        </div>
-
-                        <div>
-                          <h4 className="text-sm font-medium text-slate-200">
-                            {tx.note ||
-                              tx.category_name ||
-                              'Transaction'}
-                          </h4>
-
-                          <span className="text-xs text-slate-400">
-                            {tx.source_account_name || 'Account'} •{' '}
-                            {tx.ad_date}
-                            {tx.synced === false
-                              ? ' • Pending Sync'
-                              : ''}
-                          </span>
-                        </div>
-                      </div>
-
-                      <span
-                        className={`text-sm font-bold ${
-                          tx.transaction_type === 'EXPENSE'
-                            ? 'text-rose-400'
-                            : 'text-emerald-400'
-                        }`}
+                  transactions.map((tx) => {
+                    const isTransfer = tx.transaction_type === 'TRANSFER';
+                    const isIncome = tx.transaction_type === 'INCOME';
+                    return (
+                      <div
+                        key={tx.id}
+                        className="bg-slate-950/70 border border-slate-800 rounded-2xl p-3.5 flex items-center justify-between gap-3"
                       >
-                        {tx.transaction_type === 'EXPENSE'
-                          ? '-'
-                          : '+'}{' '}
-                        {formatNPR(tx.total_amount, isBlurred)}
-                      </span>
-                    </div>
-                  ))
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-9 h-9 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-300 shrink-0">
+                            {isTransfer ? (
+                              <ArrowLeftRight size={16} />
+                            ) : isIncome ? (
+                              <ArrowDownLeft size={16} className="text-emerald-400" />
+                            ) : (
+                              <ArrowUpRight size={16} className="text-rose-400" />
+                            )}
+                          </div>
+                          <div className="truncate">
+                            <p className="text-sm font-semibold text-white truncate">
+                              {tx.note || tx.category_name || tx.transaction_type}
+                            </p>
+                            <p className="text-[11px] text-slate-400 truncate">
+                              {tx.source_account_name || ''}
+                              {isTransfer && tx.destination_account_name
+                                ? ` → ${tx.destination_account_name}`
+                                : ''}{' '}
+                              • {tx.ad_date}
+                            </p>
+                          </div>
+                        </div>
+                        <span
+                          className={`text-sm font-bold shrink-0 ${
+                            isTransfer
+                              ? 'text-slate-300'
+                              : isIncome
+                                ? 'text-emerald-400'
+                                : 'text-rose-400'
+                          }`}
+                        >
+                          {formatNPR(tx.total_amount, isBlurred)}
+                        </span>
+                      </div>
+                    );
+                  })
                 )}
               </div>
             </>
           )}
 
-          {/* Sapati tab */}
           {activeTab === 'sapati' && (
             <SapatiTab
               sapatiList={sapatiList}
               accounts={accounts}
               isBlurred={isBlurred}
-              onRefresh={fetchData}
+              onRefresh={handleAfterSave}
             />
           )}
 
-          {/* Accounts tab */}
           {activeTab === 'accounts' && (
             <AccountsTab
               accounts={accounts}
               isBlurred={isBlurred}
-              onRefresh={fetchData}
+              onRefresh={handleAfterSave}
             />
           )}
         </main>
+      </div>
 
-        {/* Bottom navigation */}
-        <nav className="fixed bottom-0 w-full max-w-md bg-slate-950/95 border-t border-slate-800 py-3 px-3 flex justify-around items-center backdrop-blur z-20">
+      {/* Bottom Navigation Bar */}
+      <nav className="fixed bottom-0 inset-x-0 bg-slate-950/95 border-t border-slate-800 backdrop-blur-md z-40">
+        <div className="max-w-2xl mx-auto px-6 h-16 flex items-center justify-around">
           <button
+            type="button"
             onClick={() => setActiveTab('dashboard')}
-            className={navButtonClass('dashboard')}
+            className={`flex flex-col items-center gap-1 text-xs ${
+              activeTab === 'dashboard' ? 'text-emerald-400 font-semibold' : 'text-slate-400'
+            }`}
           >
-            <Wallet size={20} />
+            <Home size={18} />
             <span>Home</span>
           </button>
 
           <button
+            type="button"
             onClick={() => setActiveTab('sapati')}
-            className={navButtonClass('sapati')}
+            className={`flex flex-col items-center gap-1 text-xs ${
+              activeTab === 'sapati' ? 'text-emerald-400 font-semibold' : 'text-slate-400'
+            }`}
           >
-            <Users size={20} />
+            <Users size={18} />
             <span>Sapati</span>
           </button>
 
           <button
+            type="button"
             onClick={() => setIsQuickAddOpen(true)}
-            className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 p-3 rounded-full shadow-lg shadow-emerald-500/20 transform hover:scale-105 transition -mt-6"
-            title="Add Expense"
+            className="-mt-6 w-12 h-12 rounded-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 flex items-center justify-center shadow-lg shadow-emerald-500/30 transition"
+            title="Quick Expense"
           >
-            <PlusCircle size={28} />
+            <Plus size={22} strokeWidth={2.5} />
           </button>
 
           <button
+            type="button"
             onClick={() => setActiveTab('accounts')}
-            className={navButtonClass('accounts')}
+            className={`flex flex-col items-center gap-1 text-xs ${
+              activeTab === 'accounts' ? 'text-emerald-400 font-semibold' : 'text-slate-400'
+            }`}
           >
-            <Wallet size={20} />
+            <Wallet size={18} />
             <span>Accounts</span>
           </button>
+        </div>
+      </nav>
 
-          <button
-            onClick={handleLogout}
-            className="flex flex-col items-center gap-1 text-xs text-slate-400 hover:text-rose-400 transition"
-          >
-            <LogOut size={20} />
-            <span>Logout</span>
-          </button>
-        </nav>
-      </div>
-
-      {/* Quick Add modal */}
       <QuickAddModal
         isOpen={isQuickAddOpen}
         onClose={() => setIsQuickAddOpen(false)}
         accounts={accounts}
         categories={categories}
-        onSaved={handleTransactionSaved}
+        onSaved={handleAfterSave}
       />
     </div>
   );
