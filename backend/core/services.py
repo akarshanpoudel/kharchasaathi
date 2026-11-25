@@ -42,11 +42,9 @@ class FinancialService:
     ):
         """Creates a transaction atomically, updating account balances and Sapati splits safely."""
         with transaction.atomic():
-            # 1. Check idempotency to prevent duplicate double-submits from offline PWA queue
             if idempotency_key and Transaction.objects.filter(idempotency_key=idempotency_key).exists():
                 return Transaction.objects.get(idempotency_key=idempotency_key)
 
-            # 2. Fetch and lock source account row to prevent race conditions
             source_account = Account.objects.select_for_update().get(
                 id=source_account_id, workspace=workspace
             )
@@ -57,14 +55,11 @@ class FinancialService:
                     id=destination_account_id, workspace=workspace
                 )
 
-            # 3. Compute Bikram Sambat fields
             bs_info = cls.get_current_bs_date(ad_date)
 
-            # 4. Handle default personal expense amount if not explicitly split
             if personal_expense_amount is None:
                 personal_expense_amount = total_amount
 
-            # 5. Create the Transaction record
             txn = Transaction.objects.create(
                 workspace=workspace,
                 created_by=user,
@@ -82,7 +77,6 @@ class FinancialService:
                 idempotency_key=idempotency_key,
             )
 
-            # 6. Adjust Account Balances based on transaction type
             if transaction_type == 'EXPENSE':
                 source_account.balance -= total_amount
                 source_account.save()
@@ -99,7 +93,6 @@ class FinancialService:
                 destination_account.balance += total_amount
                 destination_account.save()
 
-            # 7. Handle Sapati / Bill Splits if provided
             if splits_data and transaction_type == 'EXPENSE':
                 for split in splits_data:
                     SapatiSplit.objects.create(
@@ -112,17 +105,17 @@ class FinancialService:
             return txn
 
     @classmethod
-    def settle_sapati_split(cls, split_id, account_id, workspace):
+    def settle_sapati_split(cls, split_id, account_id, workspace_id):
         """Marks a Sapati split as settled and updates the target wallet/cash balance."""
         with transaction.atomic():
             split = SapatiSplit.objects.select_for_update().get(
-                id=split_id, transaction__workspace=workspace
+                id=split_id, transaction__workspace_id=workspace_id
             )
             if split.is_settled:
                 return split
 
             account = Account.objects.select_for_update().get(
-                id=account_id, workspace=workspace
+                id=account_id, workspace_id=workspace_id
             )
 
             if split.direction == 'RECEIVABLE':
